@@ -40,6 +40,7 @@
 #include "iresearch/index/norm.hpp"
 #include "iresearch/search/scorer_impl.hpp"
 #include "iresearch/search/scorers.hpp"
+#include "vpack/serializer.h"
 
 namespace irs {
 namespace {
@@ -81,59 +82,40 @@ Scorer::ptr MakeFromBool(const vpack::Slice slice) {
   return std::make_unique<TFIDF>(slice.getBool());
 }
 
-constexpr std::string_view kWithNormsParamName("withNorms");
+struct Params {
+  bool withNorms = TFIDF::WITH_NORMS();  // NOLINT
+};
 
 Scorer::ptr MakeFromObject(const vpack::Slice slice) {
-  SDB_ASSERT(slice.isObject());
-
-  auto normalize = TFIDF::WITH_NORMS();
-
-  if (auto v = slice.get(kWithNormsParamName); !v.isNone()) {
-    if (!v.isBool()) {
-      SDB_ERROR(
-        "xxxxx", sdb::Logger::IRESEARCH,
-        absl::StrCat("Non-boolean value in '", kWithNormsParamName,
-                     "' while constructing tfidf scorer from VPack arguments"));
-      return nullptr;
-    }
-    normalize = v.getBool();
+  Params params;
+  auto r = vpack::ReadObjectNothrow(slice, params,
+                                    {
+                                      .skip_unknown = true,
+                                      .strict = false,
+                                    });
+  if (!r.ok()) {
+    SDB_ERROR(
+      "xxxxx", sdb::Logger::IRESEARCH,
+      absl::StrCat("Error '", r.errorMessage(),
+                   "' while constructing tfidf scorer from VPack arguments"));
+    return {};
   }
 
-  return std::make_unique<TFIDF>(normalize);
+  return std::make_unique<TFIDF>(params.withNorms);
 }
 
 Scorer::ptr MakeFromArray(const vpack::Slice slice) {
-  SDB_ASSERT(slice.isArray());
-
-  vpack::ArrayIterator array = vpack::ArrayIterator(slice);
-  vpack::ValueLength size = array.size();
-
-  if (size > 1) {
-    // wrong number of arguments
+  Params params;
+  auto r = vpack::ReadTupleNothrow(slice, params);
+  if (!r.ok()) {
     SDB_ERROR(
       "xxxxx", sdb::Logger::IRESEARCH,
-      "Wrong number of arguments while constructing tfidf scorer from VPack "
-      "arguments (must be <= 1)");
-    return nullptr;
+      absl::StrCat("Error '", r.errorMessage(),
+                   "' while constructing bm25 scorer from VPack arguments"));
+    return {};
   }
 
-  // default args
-  auto norms = TFIDF::WITH_NORMS();
-
-  // parse `withNorms` optional argument
-  for (auto arg_slice : array) {
-    if (!arg_slice.isBool()) {
-      SDB_ERROR(
-        "xxxxx", sdb::Logger::IRESEARCH,
-        "Non-bool value on position `0` while constructing tfidf scorer from "
-        "VPack arguments");
-      return nullptr;
-    }
-
-    norms = arg_slice.getBool();
-  }
-
-  return std::make_unique<TFIDF>(norms);
+  return std::make_unique<TFIDF>(params.withNorms);
 }
 
 Scorer::ptr MakeVPack(const vpack::Slice slice) {
@@ -191,9 +173,9 @@ IRS_FORCE_INLINE float_t Tfidf(uint32_t freq, float_t idf) noexcept {
 
 template<typename Norm>
 struct TFIDFContext final : public ScoreCtx {
-  TFIDFContext(Norm&& norm, score_t boost, TFIDFStats idf, const FreqAttr* freq,
+  TFIDFContext(Norm&& norm, score_t boost, TFIDFStats idf, const uint32_t* freq,
                const FilterBoost* filter_boost = nullptr) noexcept
-    : freq{freq ? *freq : kEmptyFreq},
+    : freq{freq ? freq : &kEmptyFreq.value},
       filter_boost{filter_boost},
       idf{boost * idf.value},
       norm{std::move(norm)} {
@@ -203,7 +185,7 @@ struct TFIDFContext final : public ScoreCtx {
   TFIDFContext(const TFIDFContext&) = delete;
   TFIDFContext& operator=(const TFIDFContext&) = delete;
 
-  const FreqAttr& freq;
+  const uint32_t* freq;
   const irs::FilterBoost* filter_boost;
   float_t idf;  // precomputed : boost * idf
   [[no_unique_address]] Norm norm;
@@ -249,9 +231,9 @@ struct MakeScoreFunctionImpl<TFIDFContext<Norm>> {
         }
 
         if constexpr (std::is_same_v<Norm, utils::Empty>) {
-          *res = Tfidf(state.freq.value, idf);
+          *res = Tfidf(*state.freq, idf);
         } else {
-          *res = Tfidf(state.freq.value, idf) * state.norm();
+          *res = Tfidf(*state.freq, idf) * state.norm();
         }
       },
       ScoreFunction::DefaultMin, std::forward<Args>(args)...);
@@ -300,7 +282,7 @@ ScoreFunction TFIDF::PrepareScorer(const ColumnProvider& segment,
     auto prepare_norm_scorer =
       [&]<typename Norm>(Norm&& norm) -> ScoreFunction {
       return MakeScoreFunction<TFIDFContext<Norm>>(
-        filter_boost, std::move(norm), boost, *stats, freq);
+        filter_boost, std::move(norm), boost, *stats, &freq->value);
     };
 
     // Check if norms are present in attributes
@@ -335,7 +317,7 @@ ScoreFunction TFIDF::PrepareScorer(const ColumnProvider& segment,
   }
 
   return MakeScoreFunction<TFIDFContext<utils::Empty>>(
-    filter_boost, utils::Empty{}, boost, *stats, freq);
+    filter_boost, utils::Empty{}, boost, *stats, &freq->value);
 }
 
 TermCollector::ptr TFIDF::PrepareTermCollector() const {

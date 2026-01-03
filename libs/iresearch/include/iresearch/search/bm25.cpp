@@ -40,6 +40,7 @@
 #include "iresearch/search/scorer_impl.hpp"
 #include "iresearch/utils/type_limits.hpp"
 #include "scorer.hpp"
+#include "vpack/serializer.h"
 
 namespace irs {
 namespace {
@@ -81,73 +82,41 @@ struct BM25FieldCollector final : FieldCollector {
   }
 };
 
-irs::Scorer::ptr MakeFromObject(const vpack::Slice slice) {
-  SDB_ASSERT(slice.isObject());
+struct Params {
+  float_t k = BM25::K();
+  float_t b = BM25::B();
+};
 
-  float_t k{BM25::K()};
-  float_t b{BM25::B()};
-
-  auto get = [&](std::string_view key, float_t& coefficient) {
-    auto v = slice.get(key);
-    if (v.isNone()) {
-      return true;
-    }
-    if (!v.isNumber<float_t>()) {
-      SDB_ERROR(
-        "xxxxx", sdb::Logger::IRESEARCH,
-        absl::StrCat("Non-float value in '", key,
-                     "' while constructing bm25 scorer from VPack arguments"));
-      return false;
-    }
-    coefficient = v.getNumber<float_t>();
-    return true;
-  };
-  if (!get("k", k) || !get("b", b)) {
-    return nullptr;
+Scorer::ptr MakeFromObject(const vpack::Slice slice) {
+  Params params;
+  auto r = vpack::ReadObjectNothrow(slice, params,
+                                    {
+                                      .skip_unknown = true,
+                                      .strict = false,
+                                    });
+  if (!r.ok()) {
+    SDB_ERROR(
+      "xxxxx", sdb::Logger::IRESEARCH,
+      absl::StrCat("Error '", r.errorMessage(),
+                   "' while constructing bm25 scorer from VPack arguments"));
+    return {};
   }
 
-  return std::make_unique<BM25>(k, b);
+  return std::make_unique<BM25>(params.k, params.b);
 }
 
 Scorer::ptr MakeFromArray(const vpack::Slice slice) {
-  SDB_ASSERT(slice.isArray());
-
-  vpack::ArrayIterator array(slice);
-  vpack::ValueLength size = array.size();
-  if (size > 2) {
-    // wrong number of arguments
+  Params params;
+  auto r = vpack::ReadTupleNothrow(slice, params);
+  if (!r.ok()) {
     SDB_ERROR(
       "xxxxx", sdb::Logger::IRESEARCH,
-      "Wrong number of arguments while constructing bm25 scorer from VPack "
-      "arguments (must be <= 2)");
-    return nullptr;
+      absl::StrCat("Error '", r.errorMessage(),
+                   "' while constructing bm25 scorer from VPack arguments"));
+    return {};
   }
 
-  // default args
-  auto k = BM25::K();
-  auto b = BM25::B();
-  uint8_t i = 0;
-  for (auto arg_slice : array) {
-    if (!arg_slice.isNumber<decltype(k)>()) {
-      SDB_ERROR("xxxxx", sdb::Logger::IRESEARCH,
-                absl::StrCat("Non-float value at position '", i,
-                             "' while constructing bm25 scorer "
-                             "from VPack arguments"));
-      return nullptr;
-    }
-
-    switch (i) {
-      case 0:  // parse `k` coefficient
-        k = static_cast<float_t>(arg_slice.getNumber<decltype(k)>());
-        ++i;
-        break;
-      case 1:  // parse `b` coefficient
-        b = static_cast<float_t>(arg_slice.getNumber<decltype(b)>());
-        break;
-    }
-  }
-
-  return std::make_unique<BM25>(k, b);
+  return std::make_unique<BM25>(params.k, params.b);
 }
 
 Scorer::ptr MakeVPack(const vpack::Slice slice) {
@@ -207,22 +176,22 @@ struct BM1Context : public irs::ScoreCtx {
 
 struct BM15Context : public BM1Context {
   BM15Context(float_t k, irs::score_t boost, const BM25Stats& stats,
-              const FreqAttr* freq,
+              const uint32_t* freq,
               const irs::FilterBoost* fb = nullptr) noexcept
     : BM1Context{k, boost, stats, fb},
-      freq{freq ? freq : &kEmptyFreq},
+      freq{freq ? freq : &kEmptyFreq.value},
       norm_const{stats.norm_const} {
     SDB_ASSERT(this->freq);
   }
 
-  const FreqAttr* freq;  // document frequency
+  const uint32_t* freq;  // document frequency
   float_t norm_const;    // 'k' factor
 };
 
 template<typename Norm>
 struct BM25Context final : public BM15Context {
   BM25Context(float_t k, irs::score_t boost, const BM25Stats& stats,
-              const FreqAttr* freq, Norm&& norm,
+              const uint32_t* freq, Norm&& norm,
               const irs::FilterBoost* filter_boost = nullptr) noexcept
     : BM15Context{k, boost, stats, freq, filter_boost},
       norm{std::move(norm)},
@@ -293,7 +262,7 @@ struct MakeScoreFunctionImpl<BM15Context> {
 
         auto& state = *static_cast<Ctx*>(ctx);
 
-        const float_t tf = static_cast<float_t>(state.freq->value);
+        const float_t tf = static_cast<float_t>(*state.freq);
 
         float_t c0;
         if constexpr (HasFilterBoost) {
@@ -325,7 +294,7 @@ struct MakeScoreFunctionImpl<BM25Context<Norm>> {
 
         auto& state = *static_cast<Ctx*>(ctx);
 
-        auto tf = static_cast<float_t>(state.freq->value);
+        auto tf = static_cast<float_t>(*state.freq);
 
         // FIXME(gnusi): we don't need c0 for WAND evaluation
         float_t c0;
@@ -430,12 +399,12 @@ ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
 
   if (IsBM15()) {
     return MakeScoreFunction<BM15Context>(filter_boost, _k, boost, *stats,
-                                          freq);
+                                          &freq->value);
   }
 
   auto prepare_norm_scorer = [&]<typename Norm>(Norm&& norm) -> ScoreFunction {
     return MakeScoreFunction<BM25Context<Norm>>(filter_boost, _k, boost, *stats,
-                                                freq, std::move(norm));
+                                                &freq->value, std::move(norm));
   };
 
   // Check if norms are present in attributes

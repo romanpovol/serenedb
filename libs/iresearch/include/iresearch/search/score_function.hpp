@@ -43,6 +43,8 @@ struct ScoreCtx {
 // Convenient wrapper around score_ctx, score_f and min_f.
 class ScoreFunction : util::Noncopyable {
   using score_f = void (*)(ScoreCtx* ctx, score_t* res) noexcept;
+  using block_score_f = void (*)(ScoreCtx* ctx, score_t* res,
+                                 size_t size) noexcept;
   using min_f = void (*)(ScoreCtx* ctx, score_t min) noexcept;
 
   using deleter_f = void (*)(ScoreCtx* ctx) noexcept;
@@ -53,6 +55,11 @@ class ScoreFunction : util::Noncopyable {
   static void DefaultScore(ScoreCtx* ctx, score_t* res) noexcept {
     SDB_ASSERT(res != nullptr);
     const auto size = reinterpret_cast<size_t>(ctx);
+    std::memset(res, 0, size);
+  }
+  static void DefaultBlockScore(ScoreCtx* ctx, score_t* res,
+                                size_t size) noexcept {
+    SDB_ASSERT(res != nullptr);
     std::memset(res, 0, size);
   }
   static void DefaultMin(ScoreCtx* /*ctx*/, score_t /*min*/) noexcept {}
@@ -112,6 +119,11 @@ class ScoreFunction : util::Noncopyable {
     _score(_ctx, res);
   }
 
+  IRS_FORCE_INLINE void ScoreBlock(score_t* res, size_t size) const noexcept {
+    SDB_ASSERT(_score != nullptr);
+    _score_block(_ctx, res, size);
+  }
+
   IRS_FORCE_INLINE void Min(score_t arg) const noexcept {
     SDB_ASSERT(_min != nullptr);
     _min(_ctx, arg);
@@ -123,7 +135,8 @@ class ScoreFunction : util::Noncopyable {
   IRS_FORCE_INLINE void operator()(score_t* res) const noexcept { Score(res); }
 
   bool operator==(const ScoreFunction& rhs) const noexcept {
-    return _ctx == rhs._ctx && _score == rhs._score && _min == rhs._min;
+    return _ctx == rhs._ctx && _score == rhs._score &&
+           _score_block == rhs._score_block && _min == rhs._min;
   }
 
 #ifdef SDB_GTEST
@@ -138,6 +151,7 @@ class ScoreFunction : util::Noncopyable {
 
   ScoreCtx* _ctx{nullptr};
   score_f _score{DefaultScore};
+  block_score_f _score_block{DefaultBlockScore};
   min_f _min{DefaultMin};
   deleter_f _deleter{Noop};
 };
