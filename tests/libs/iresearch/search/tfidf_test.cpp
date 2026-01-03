@@ -269,11 +269,7 @@ TEST_P(TfidfTestCase, make_from_array) {
   {
     auto scorer = irs::scorers::Get(
       "tfidf", irs::Type<irs::text_format::Json>::get(), "[]");
-    ASSERT_NE(nullptr, scorer);
-    ASSERT_EQ(irs::Type<irs::TFIDF>::id(), scorer->type());
-    auto& tfidf = dynamic_cast<irs::TFIDF&>(*scorer);
-    ASSERT_EQ(irs::TFIDF::WITH_NORMS(), tfidf.normalize());
-    ASSERT_EQ(irs::TFIDF::BOOST_AS_SCORE(), tfidf.use_boost_as_score());
+    ASSERT_EQ(nullptr, scorer);
   }
 
   // `withNorms` argument

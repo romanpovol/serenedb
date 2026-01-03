@@ -29,7 +29,7 @@
 namespace irs {
 
 bool NormReaderContextBase::Reset(const ColumnProvider& reader,
-                                  field_id column_id, const DocAttr& doc) {
+                                  field_id column_id) {
   const auto* column = reader.column(column_id);
 
   if (column) {
@@ -40,7 +40,6 @@ bool NormReaderContextBase::Reset(const ColumnProvider& reader,
         this->header = column->payload();
         this->it = std::move(it);
         this->payload = payload;
-        this->doc = &doc;
         return true;
       }
     }
@@ -49,9 +48,9 @@ bool NormReaderContextBase::Reset(const ColumnProvider& reader,
   return false;
 }
 
-bool NormReaderContext::Reset(const ColumnProvider& reader, field_id column_id,
-                              const DocAttr& doc) {
-  if (NormReaderContextBase::Reset(reader, column_id, doc)) {
+bool NormReaderContext::Reset(const ColumnProvider& reader,
+                              field_id column_id) {
+  if (NormReaderContextBase::Reset(reader, column_id)) {
     const auto hdr = NormHeader::Read(header);
     if (hdr.has_value()) {
       auto& value = hdr.value();

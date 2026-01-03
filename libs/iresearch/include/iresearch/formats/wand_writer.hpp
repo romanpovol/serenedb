@@ -263,9 +263,9 @@ class FreqNormProducer {
     }
 
     if constexpr (kNorm) {
-      const auto* doc = irs::get<irs::DocAttr>(attrs);
+      _doc = irs::get<irs::DocAttr>(attrs);
 
-      if (doc == nullptr) [[unlikely]] {
+      if (!_doc) [[unlikely]] {
         return false;
       }
 
@@ -274,12 +274,13 @@ class FreqNormProducer {
       }
 
       Norm::Context ctx;
-      if (!ctx.Reset(reader, meta.norm, *doc)) [[unlikely]] {
+      if (!ctx.Reset(reader, meta.norm)) [[unlikely]] {
         return false;
       }
 
       _norm = Norm::MakeReader(std::move(ctx), [&](auto&& reader) {
-        return absl::AnyInvocable<uint32_t() noexcept>{std::move(reader)};
+        return absl::AnyInvocable<uint32_t(doc_id_t) noexcept>{
+          std::move(reader)};
       });
     }
 
@@ -289,7 +290,7 @@ class FreqNormProducer {
   IRS_FORCE_INLINE void Produce(Entry& to) noexcept {
     if constexpr (kBm25 || kDivNorm) {
       const auto freq = _freq->value;
-      const auto norm = _norm();
+      const auto norm = _norm(_doc->value);
       if constexpr (kBm25) {
         ProduceBM25(_b, freq, norm, to);
       } else {
@@ -345,8 +346,9 @@ class FreqNormProducer {
   }
 
   const irs::FreqAttr* _freq{};
+  const irs::DocAttr* _doc{};
   [[no_unique_address]]
-  utils::Need<kNorm, absl::AnyInvocable<uint32_t() noexcept>> _norm;
+  utils::Need<kNorm, absl::AnyInvocable<uint32_t(doc_id_t) noexcept>> _norm;
   [[no_unique_address]] WandScorer<kMaxScore> _scorer;
   [[no_unique_address]] utils::Need<kBm25, score_t> _b;
 };

@@ -173,9 +173,11 @@ IRS_FORCE_INLINE float_t Tfidf(uint32_t freq, float_t idf) noexcept {
 
 template<typename Norm>
 struct TFIDFContext final : public ScoreCtx {
-  TFIDFContext(Norm&& norm, score_t boost, TFIDFStats idf, const uint32_t* freq,
+  TFIDFContext(Norm&& norm, score_t boost, TFIDFStats idf, const doc_id_t* doc,
+               const uint32_t* freq,
                const FilterBoost* filter_boost = nullptr) noexcept
-    : freq{freq ? freq : &kEmptyFreq.value},
+    : doc{doc},
+      freq{freq ? freq : &kEmptyFreq.value},
       filter_boost{filter_boost},
       idf{boost * idf.value},
       norm{std::move(norm)} {
@@ -185,6 +187,7 @@ struct TFIDFContext final : public ScoreCtx {
   TFIDFContext(const TFIDFContext&) = delete;
   TFIDFContext& operator=(const TFIDFContext&) = delete;
 
+  const doc_id_t* doc;
   const uint32_t* freq;
   const irs::FilterBoost* filter_boost;
   float_t idf;  // precomputed : boost * idf
@@ -195,8 +198,8 @@ template<typename Reader, NormType Type>
 struct TFIDFNormAdapter final {
   explicit TFIDFNormAdapter(Reader&& reader) : reader{std::move(reader)} {}
 
-  IRS_FORCE_INLINE decltype(auto) operator()() {
-    return kRSQRT.get<Type != NormType::NormTiny>(reader());
+  IRS_FORCE_INLINE decltype(auto) operator()(doc_id_t doc) {
+    return kRSQRT.get<Type != NormType::NormTiny>(reader(doc));
   }
 
   [[no_unique_address]] Reader reader;
@@ -233,7 +236,7 @@ struct MakeScoreFunctionImpl<TFIDFContext<Norm>> {
         if constexpr (std::is_same_v<Norm, utils::Empty>) {
           *res = Tfidf(*state.freq, idf);
         } else {
-          *res = Tfidf(*state.freq, idf) * state.norm();
+          *res = Tfidf(*state.freq, idf) * state.norm(*state.doc);
         }
       },
       ScoreFunction::DefaultMin, std::forward<Args>(args)...);
@@ -277,30 +280,32 @@ ScoreFunction TFIDF::PrepareScorer(const ColumnProvider& segment,
   const auto* stats = stats_cast(stats_buf);
   auto* filter_boost = irs::get<irs::FilterBoost>(doc_attrs);
 
+  auto* doc = irs::get<DocAttr>(doc_attrs);
+
+  if (!doc) [[unlikely]] {
+    // we need 'document' attribute to be exposed
+    return ScoreFunction::Default(1);
+  }
+
   // add norm attribute if requested
   if (_normalize) {
     auto prepare_norm_scorer =
       [&]<typename Norm>(Norm&& norm) -> ScoreFunction {
       return MakeScoreFunction<TFIDFContext<Norm>>(
-        filter_boost, std::move(norm), boost, *stats, &freq->value);
+        filter_boost, std::move(norm), boost, *stats, &doc->value,
+        &freq->value);
     };
 
     // Check if norms are present in attributes
     if (auto* norm = irs::get<Norm>(doc_attrs); norm) {
       return prepare_norm_scorer(MakeTFIDFNormAdapter<NormType::Norm>(
-        [norm]() noexcept { return norm->value; }));
+        [norm](doc_id_t) noexcept { return norm->value; }));
     }
 
     // Fallback to reading from columnstore
-    auto* doc = irs::get<DocAttr>(doc_attrs);
-
-    if (!doc) [[unlikely]] {
-      // we need 'document' attribute to be exposed
-      return ScoreFunction::Default(1);
-    }
 
     if (field_limits::valid(meta.norm)) {
-      if (Norm::Context ctx; ctx.Reset(segment, meta.norm, *doc)) {
+      if (Norm::Context ctx; ctx.Reset(segment, meta.norm)) {
         if (ctx.max_num_bytes == sizeof(byte_type)) {
           return Norm::MakeReader(std::move(ctx), [&](auto&& reader) {
             return prepare_norm_scorer(
@@ -317,7 +322,7 @@ ScoreFunction TFIDF::PrepareScorer(const ColumnProvider& segment,
   }
 
   return MakeScoreFunction<TFIDFContext<utils::Empty>>(
-    filter_boost, utils::Empty{}, boost, *stats, &freq->value);
+    filter_boost, utils::Empty{}, boost, *stats, &doc->value, &freq->value);
 }
 
 TermCollector::ptr TFIDF::PrepareTermCollector() const {

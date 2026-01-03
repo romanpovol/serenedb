@@ -31,14 +31,12 @@
 namespace irs {
 
 struct NormReaderContextBase {
-  bool Reset(const ColumnProvider& segment, field_id column,
-             const DocAttr& doc);
-  bool Valid() const noexcept { return doc != nullptr; }
+  bool Reset(const ColumnProvider& segment, field_id column);
+  bool Valid() const noexcept { return it != nullptr; }
 
   bytes_view header;
   DocIterator::ptr it;
   const irs::PayAttr* payload{};
-  const DocAttr* doc{};
 };
 
 static_assert(std::is_nothrow_move_constructible_v<NormReaderContextBase>);
@@ -156,8 +154,7 @@ class NormWriter : public FeatureWriter {
 };
 
 struct NormReaderContext : NormReaderContextBase {
-  bool Reset(const ColumnProvider& segment, field_id column,
-             const DocAttr& doc);
+  bool Reset(const ColumnProvider& segment, field_id column);
   bool Valid() const noexcept {
     return NormReaderContextBase::Valid() && num_bytes;
   }
@@ -182,11 +179,9 @@ class Norm : public Attribute {
     SDB_ASSERT(ctx.num_bytes == sizeof(T));
     SDB_ASSERT(ctx.it);
     SDB_ASSERT(ctx.payload);
-    SDB_ASSERT(ctx.doc);
 
-    return [ctx = std::move(ctx)]() noexcept -> ValueType {
-      if (const doc_id_t doc = ctx.doc->value; doc == ctx.it->seek(doc))
-        [[likely]] {
+    return [ctx = std::move(ctx)](doc_id_t doc) noexcept -> ValueType {
+      if (doc == ctx.it->seek(doc)) [[likely]] {
         SDB_ASSERT(sizeof(T) == ctx.payload->value.size());
         const auto* value = ctx.payload->value.data();
 

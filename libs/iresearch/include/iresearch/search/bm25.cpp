@@ -191,15 +191,17 @@ struct BM15Context : public BM1Context {
 template<typename Norm>
 struct BM25Context final : public BM15Context {
   BM25Context(float_t k, irs::score_t boost, const BM25Stats& stats,
-              const uint32_t* freq, Norm&& norm,
+              const doc_id_t* doc, const uint32_t* freq, Norm&& norm,
               const irs::FilterBoost* filter_boost = nullptr) noexcept
     : BM15Context{k, boost, stats, freq, filter_boost},
       norm{std::move(norm)},
       norm_length{stats.norm_length},
+      doc{doc},
       norm_cache{stats.norm_cache} {}
 
   Norm norm;
   float_t norm_length;  // precomputed 'k*b/avg_dl'
+  const doc_id_t* doc;
   const float_t* norm_cache;
 };
 
@@ -209,9 +211,9 @@ struct BM25NormAdapter final {
 
   explicit BM25NormAdapter(Reader&& reader) : reader{std::move(reader)} {}
 
-  IRS_FORCE_INLINE decltype(auto) operator()() {
+  IRS_FORCE_INLINE decltype(auto) operator()(doc_id_t doc) {
     // norms are stored |doc| as uint32_t
-    return reader();
+    return reader(doc);
   }
 
   [[no_unique_address]] Reader reader;
@@ -306,15 +308,17 @@ struct MakeScoreFunctionImpl<BM25Context<Norm>> {
         }
 
         if constexpr (NormType::NormTiny == Norm::kType) {
-          static_assert(std::is_same_v<uint32_t, decltype(state.norm())>);
-          SDB_ASSERT((state.norm() & 0xFFU) != 0U);
-          const float_t inv_c1 = state.norm_cache[state.norm() & 0xFFU];
+          static_assert(
+            std::is_same_v<uint32_t, decltype(state.norm(*state.doc))>);
+          SDB_ASSERT((state.norm(*state.doc) & 0xFFU) != 0U);
+          const float_t inv_c1 =
+            state.norm_cache[state.norm(*state.doc) & 0xFFU];
 
           *res = c0 - c0 / (1.f + tf * inv_c1);
         } else {
           const float_t c1 =
             state.norm_const +
-            state.norm_length * static_cast<float_t>(state.norm());
+            state.norm_length * static_cast<float_t>(state.norm(*state.doc));
 
           *res = c0 - c0 * c1 / (c1 + tf);
         }
@@ -402,17 +406,6 @@ ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
                                           &freq->value);
   }
 
-  auto prepare_norm_scorer = [&]<typename Norm>(Norm&& norm) -> ScoreFunction {
-    return MakeScoreFunction<BM25Context<Norm>>(filter_boost, _k, boost, *stats,
-                                                &freq->value, std::move(norm));
-  };
-
-  // Check if norms are present in attributes
-  if (auto* norm = irs::get<Norm>(doc_attrs); norm) {
-    return prepare_norm_scorer(MakeBM25NormAdapter<NormType::Norm>(
-      [norm]() noexcept { return norm->value; }));
-  }
-
   // Fallback to reading from columnstore
   auto* doc = irs::get<DocAttr>(doc_attrs);
 
@@ -421,8 +414,20 @@ ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
     return ScoreFunction::Default(1);
   }
 
+  auto prepare_norm_scorer = [&]<typename Norm>(Norm&& norm) -> ScoreFunction {
+    return MakeScoreFunction<BM25Context<Norm>>(filter_boost, _k, boost, *stats,
+                                                &doc->value, &freq->value,
+                                                std::move(norm));
+  };
+
+  // Check if norms are present in attributes
+  if (auto* norm = irs::get<Norm>(doc_attrs); norm) {
+    return prepare_norm_scorer(MakeBM25NormAdapter<NormType::Norm>(
+      [norm](doc_id_t) noexcept { return norm->value; }));
+  }
+
   if (field_limits::valid(meta.norm)) {
-    if (NormReaderContext ctx; ctx.Reset(segment, meta.norm, *doc)) {
+    if (NormReaderContext ctx; ctx.Reset(segment, meta.norm)) {
       if (ctx.max_num_bytes == sizeof(byte_type)) {
         return Norm::MakeReader(std::move(ctx), [&](auto&& reader) {
           return prepare_norm_scorer(
@@ -439,7 +444,7 @@ ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
 
   // No norms, pretend all fields have the same length 1.
   return prepare_norm_scorer(
-    MakeBM25NormAdapter<NormType::NormTiny>([] { return 1U; }));
+    MakeBM25NormAdapter<NormType::NormTiny>([](doc_id_t) { return 1U; }));
 }
 
 WandWriter::ptr BM25::prepare_wand_writer(size_t max_levels) const {

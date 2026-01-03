@@ -244,24 +244,14 @@ TEST_P(Bm25TestCase, make_from_array) {
   {
     auto scorer =
       irs::scorers::Get("bm25", irs::Type<irs::text_format::Json>::get(), "[]");
-    ASSERT_NE(nullptr, scorer);
-    ASSERT_EQ(irs::Type<irs::BM25>::id(), scorer->type());
-    auto& bm25 = dynamic_cast<irs::BM25&>(*scorer);
-    ASSERT_EQ(irs::BM25::K(), bm25.k());
-    ASSERT_EQ(irs::BM25::B(), bm25.b());
-    ASSERT_EQ(irs::BM25::BOOST_AS_SCORE(), bm25.use_boost_as_score());
+    ASSERT_EQ(nullptr, scorer);
   }
 
   // `k` argument
   {
     auto scorer = irs::scorers::Get(
       "bm25", irs::Type<irs::text_format::Json>::get(), "[ 1.5 ]");
-    ASSERT_NE(nullptr, scorer);
-    ASSERT_EQ(irs::Type<irs::BM25>::id(), scorer->type());
-    auto& bm25 = dynamic_cast<irs::BM25&>(*scorer);
-    ASSERT_EQ(1.5f, bm25.k());
-    ASSERT_EQ(irs::BM25::B(), bm25.b());
-    ASSERT_EQ(irs::BM25::BOOST_AS_SCORE(), bm25.use_boost_as_score());
+    ASSERT_EQ(nullptr, scorer);
   }
 
   // invalid `k` argument
