@@ -175,7 +175,7 @@ template<typename Norm>
 struct TFIDFContext final : public ScoreCtx {
   TFIDFContext(Norm&& norm, score_t boost, TFIDFStats idf, const doc_id_t* doc,
                const uint32_t* freq,
-               const FilterBoost* filter_boost = nullptr) noexcept
+               const score_t* filter_boost = nullptr) noexcept
     : doc{doc},
       freq{freq ? freq : &kEmptyFreq.value},
       filter_boost{filter_boost},
@@ -189,7 +189,7 @@ struct TFIDFContext final : public ScoreCtx {
 
   const doc_id_t* doc;
   const uint32_t* freq;
-  const irs::FilterBoost* filter_boost;
+  const score_t* filter_boost;
   float_t idf;  // precomputed : boost * idf
   [[no_unique_address]] Norm norm;
 };
@@ -228,7 +228,7 @@ struct MakeScoreFunctionImpl<TFIDFContext<Norm>> {
         float_t idf;
         if constexpr (HasFilterBoost) {
           SDB_ASSERT(state.filter_boost);
-          idf = state.idf * state.filter_boost->value;
+          idf = state.idf * *state.filter_boost;
         } else {
           idf = state.idf;
         }
@@ -278,7 +278,7 @@ ScoreFunction TFIDF::PrepareScorer(const ColumnProvider& segment,
   }
 
   const auto* stats = stats_cast(stats_buf);
-  auto* filter_boost = irs::get<irs::FilterBoost>(doc_attrs);
+  auto* filter_boost = irs::get<FilterBoost>(doc_attrs);
 
   auto* doc = irs::get<DocAttr>(doc_attrs);
 

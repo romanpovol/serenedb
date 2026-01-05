@@ -28,6 +28,7 @@
 #include <vpack/vpack.h>
 
 #include <cstdint>
+#include <iresearch/utils/attribute_provider.hpp>
 
 #include "basics/down_cast.h"
 #include "basics/math_utils.hpp"
@@ -166,18 +167,17 @@ Scorer::ptr MakeJson(std::string_view args) {
 }
 
 struct BM1Context : public irs::ScoreCtx {
-  BM1Context(float_t k, irs::score_t boost, const BM25Stats& stats,
-             const irs::FilterBoost* fb = nullptr) noexcept
+  BM1Context(float_t k, score_t boost, const BM25Stats& stats,
+             const score_t* fb = nullptr) noexcept
     : filter_boost{fb}, num{boost * (k + 1) * stats.idf} {}
 
-  const irs::FilterBoost* filter_boost;
+  const score_t* filter_boost;
   float_t num;  // partially precomputed numerator : boost * (k + 1) * idf
 };
 
 struct BM15Context : public BM1Context {
-  BM15Context(float_t k, irs::score_t boost, const BM25Stats& stats,
-              const uint32_t* freq,
-              const irs::FilterBoost* fb = nullptr) noexcept
+  BM15Context(float_t k, score_t boost, const BM25Stats& stats,
+              const uint32_t* freq, const score_t* fb = nullptr) noexcept
     : BM1Context{k, boost, stats, fb},
       freq{freq ? freq : &kEmptyFreq.value},
       norm_const{stats.norm_const} {
@@ -190,9 +190,9 @@ struct BM15Context : public BM1Context {
 
 template<typename Norm>
 struct BM25Context final : public BM15Context {
-  BM25Context(float_t k, irs::score_t boost, const BM25Stats& stats,
+  BM25Context(float_t k, score_t boost, const BM25Stats& stats,
               const doc_id_t* doc, const uint32_t* freq, Norm&& norm,
-              const irs::FilterBoost* filter_boost = nullptr) noexcept
+              const score_t* filter_boost = nullptr) noexcept
     : BM15Context{k, boost, stats, freq, filter_boost},
       norm{std::move(norm)},
       norm_length{stats.norm_length},
@@ -241,7 +241,7 @@ struct MakeScoreFunctionImpl<BM1Context> {
           auto& state = *static_cast<Ctx*>(ctx);
 
           SDB_ASSERT(state.filter_boost);
-          *res = state.filter_boost->value * state.num;
+          *res = *state.filter_boost * state.num;
         },
         ScoreFunction::DefaultMin, std::forward<Args>(args)...);
     } else {
@@ -269,7 +269,7 @@ struct MakeScoreFunctionImpl<BM15Context> {
         float_t c0;
         if constexpr (HasFilterBoost) {
           SDB_ASSERT(state.filter_boost);
-          c0 = state.filter_boost->value * state.num;
+          c0 = *state.filter_boost * state.num;
         } else {
           c0 = state.num;
         }
@@ -302,7 +302,7 @@ struct MakeScoreFunctionImpl<BM25Context<Norm>> {
         float_t c0;
         if constexpr (HasFilterBoost) {
           SDB_ASSERT(state.filter_boost);
-          c0 = state.filter_boost->value * state.num;
+          c0 = *state.filter_boost * state.num;
         } else {
           c0 = state.num;
         }
@@ -377,6 +377,11 @@ FieldCollector::ptr BM25::PrepareFieldCollector() const {
   return std::make_unique<BM25FieldCollector>();
 }
 
+struct Collector {
+  virtual ~Collector() = default;
+  virtual void Collect() = 0;
+};
+
 ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
                                   const FieldProperties& meta,
                                   const byte_type* query_stats,
@@ -406,7 +411,6 @@ ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
                                           &freq->value);
   }
 
-  // Fallback to reading from columnstore
   auto* doc = irs::get<DocAttr>(doc_attrs);
 
   if (!doc) [[unlikely]] {
