@@ -150,8 +150,8 @@ class SamePositionQuery : public Filter::Query {
         auto* score = irs::GetMutable<irs::ScoreAttr>(docs.get());
         SDB_ASSERT(score);
 
-        CompileScore(*score, ord.buckets(), segment, *term_state.reader,
-                     term_stats->c_str(), *docs, _boost);
+        CompileScore(*score, ord.buckets(), ctx.segment, ctx.collector,
+                     *term_state.reader, term_stats->c_str(), *docs, _boost);
       }
 
       // add iterator

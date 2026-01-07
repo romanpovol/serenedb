@@ -27,7 +27,9 @@
 #include <iresearch/search/bm25.hpp>
 #include <iresearch/search/ngram_similarity_filter.hpp>
 #include <iresearch/search/ngram_similarity_query.hpp>
+#include <iresearch/search/scorer.hpp>
 #include <iresearch/search/tfidf.hpp>
+#include <iresearch/utils/lz4compression.hpp>
 #include <iresearch/utils/ngram_match_utils.hpp>
 
 #include "filter_test_case_base.hpp"
@@ -1191,12 +1193,10 @@ TEST_P(NGramSimilarityFilterTestCase, missed_last_scored_test) {
     return std::make_unique<CustomNGramScorer::TermCollector>(scorer);
   };
   scorer.prepare_scorer =
-    [&frequency, &filter_boost](
-      const irs::ColumnProvider& /*segment*/,
-      const irs::FieldProperties& /*term*/, const irs::byte_type* /*stats_buf*/,
-      const irs::AttributeProvider& attr, irs::score_t) -> irs::ScoreFunction {
-    auto* freq = irs::get<irs::FreqAttr>(attr);
-    auto* boost = irs::get<irs::FilterBoost>(attr);
+    [&frequency,
+     &filter_boost](const irs::ScoreContext& ctx) -> irs::ScoreFunction {
+    auto* freq = irs::get<irs::FreqAttr>(ctx.doc_attrs);
+    auto* boost = irs::get<irs::FilterBoost>(ctx.doc_attrs);
     return irs::ScoreFunction::Make<TestScoreCtx>(
       [](irs::ScoreCtx* ctx, irs::score_t* res) noexcept {
         const auto& freq = *reinterpret_cast<TestScoreCtx*>(ctx);
@@ -1263,12 +1263,10 @@ TEST_P(NGramSimilarityFilterTestCase, missed_frequency_test) {
     return std::make_unique<CustomNGramScorer::TermCollector>(scorer);
   };
   scorer.prepare_scorer =
-    [&frequency, &filter_boost](
-      const irs::ColumnProvider& /*segment*/,
-      const irs::FieldProperties& /*term*/, const irs::byte_type* /*stats_buf*/,
-      const irs::AttributeProvider& attr, irs::score_t) -> irs::ScoreFunction {
-    auto* freq = irs::get<irs::FreqAttr>(attr);
-    auto* boost = irs::get<irs::FilterBoost>(attr);
+    [&frequency,
+     &filter_boost](const irs::ScoreContext& ctx) -> irs::ScoreFunction {
+    auto* freq = irs::get<irs::FreqAttr>(ctx.doc_attrs);
+    auto* boost = irs::get<irs::FilterBoost>(ctx.doc_attrs);
     return irs::ScoreFunction::Make<TestScoreCtx>(
       [](irs::ScoreCtx* ctx, irs::score_t* res) noexcept {
         const auto& freq = *static_cast<TestScoreCtx*>(ctx);

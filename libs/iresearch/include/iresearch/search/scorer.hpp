@@ -22,8 +22,6 @@
 
 #pragma once
 
-#include <set>
-
 #include "basics/containers/small_vector.h"
 #include "basics/math_utils.hpp"
 #include "iresearch/index/field_meta.hpp"
@@ -41,6 +39,7 @@ class IndexOutput;
 struct SubReader;
 struct ColumnProvider;
 struct TermReader;
+class ColumnCollector;
 
 // Represents no boost value.
 inline constexpr score_t kNoBoost{1.f};
@@ -140,6 +139,15 @@ struct WandWriter {
   virtual byte_type SizeRoot(size_t level) = 0;
 };
 
+struct ScoreContext {
+  const ColumnProvider& segment;
+  const FieldProperties& field;
+  const AttributeProvider& doc_attrs;
+  ColumnCollector* collector = nullptr;
+  const byte_type* stats = nullptr;
+  score_t boost = kNoBoost;
+};
+
 // Base class for all scorers.
 // Stats are meant to be trivially constructible and will be
 // zero initialized before usage.
@@ -175,11 +183,7 @@ struct Scorer {
   virtual FieldCollector::ptr PrepareFieldCollector() const = 0;
 
   // Create a stateful scorer used for computation of document scores
-  virtual ScoreFunction PrepareScorer(const ColumnProvider& segment,
-                                      const FieldProperties& meta,
-                                      const byte_type* stats,
-                                      const AttributeProvider& doc_attrs,
-                                      score_t boost) const = 0;
+  virtual ScoreFunction PrepareScorer(const ScoreContext& ctx) const = 0;
 
   // Create an object to be used for collecting index statistics, one
   // instance per matched term.

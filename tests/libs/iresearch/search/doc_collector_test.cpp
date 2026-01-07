@@ -24,6 +24,7 @@
 #include <iresearch/search/boolean_filter.hpp>
 #include <iresearch/search/doc_collector.hpp>
 #include <iresearch/search/score.hpp>
+#include <iresearch/search/scorer.hpp>
 #include <iresearch/search/scorers.hpp>
 #include <iresearch/search/term_filter.hpp>
 #include <span>
@@ -45,11 +46,7 @@ struct DocIdScorer : irs::ScorerBase<void> {
     return irs::IndexFeatures::None;
   }
 
-  irs::ScoreFunction PrepareScorer(const irs::ColumnProvider&,
-                                   const irs::FieldProperties&,
-                                   const irs::byte_type*,
-                                   const irs::AttributeProvider& attrs,
-                                   irs::score_t) const final {
+  irs::ScoreFunction PrepareScorer(const irs::ScoreContext& ctx) const final {
     struct ScorerContext final : irs::ScoreCtx {
       ScorerContext(const irs::DocAttr* doc, irs::doc_id_t divisor) noexcept
         : doc{doc}, divisor{divisor} {}
@@ -58,7 +55,7 @@ struct DocIdScorer : irs::ScorerBase<void> {
       irs::doc_id_t divisor;
     };
 
-    auto* doc = irs::get<irs::DocAttr>(attrs);
+    auto* doc = irs::get<irs::DocAttr>(ctx.doc_attrs);
     EXPECT_NE(nullptr, doc);
 
     return irs::ScoreFunction::Make<ScorerContext>(

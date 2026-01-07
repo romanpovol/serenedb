@@ -29,11 +29,13 @@
 #include <iresearch/search/all_iterator.hpp>
 #include <iresearch/search/bm25.hpp>
 #include <iresearch/search/boolean_filter.hpp>
+#include <iresearch/search/column_collector.hpp>
 #include <iresearch/search/conjunction.hpp>
 #include <iresearch/search/disjunction.hpp>
 #include <iresearch/search/exclusion.hpp>
 #include <iresearch/search/min_match_disjunction.hpp>
 #include <iresearch/search/range_filter.hpp>
+#include <iresearch/search/scorer.hpp>
 #include <iresearch/search/term_filter.hpp>
 #include <iresearch/search/term_query.hpp>
 #include <iresearch/search/tfidf.hpp>
@@ -78,11 +80,7 @@ struct BasicSort : irs::ScorerBase<BasicSort, void> {
     return irs::IndexFeatures::None;
   }
 
-  irs::ScoreFunction PrepareScorer(const irs::ColumnProvider&,
-                                   const irs::FieldProperties&,
-                                   const irs::byte_type*,
-                                   const irs::AttributeProvider&,
-                                   irs::score_t) const final {
+  irs::ScoreFunction PrepareScorer(const irs::ScoreContext& ctx) const final {
     return irs::ScoreFunction::Make<BasicScorer>(
       [](irs::ScoreCtx* ctx, irs::score_t* res) noexcept {
         ASSERT_NE(nullptr, res);
@@ -117,7 +115,7 @@ class BasicDocIterator : public irs::DocIterator, irs::ScoreCtx {
       SDB_ASSERT(_stats);
 
       _scorers =
-        irs::PrepareScorers(ord.buckets(), irs::SubReader::empty(),
+        irs::PrepareScorers(ord.buckets(), irs::SubReader::empty(), nullptr,
                             irs::EmptyTermReader{0}, _stats, *this, boost);
 
       _score.Reset(*this, [](irs::ScoreCtx* ctx, irs::score_t* res) noexcept {

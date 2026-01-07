@@ -113,8 +113,8 @@ DocIterator::ptr FixedPhraseQuery::execute(const ExecutionContext& ctx) const {
   }
   return ResolveBool(has_intervals, [&]<bool HasIntervals> -> DocIterator::ptr {
     return memory::make_managed<FixedPhraseIterator<false, true, HasIntervals>>(
-      std::move(itrs), std::move(positions), rdr, *phrase_state->reader,
-      stats.c_str(), ord, boost);
+      std::move(itrs), std::move(positions), rdr, ctx.collector,
+      *phrase_state->reader, stats.c_str(), ord, boost);
   });
 }
 
@@ -306,15 +306,15 @@ DocIterator::ptr VariadicPhraseQuery::execute(
       has_intervals, [&]<bool HasIntervals> -> DocIterator::ptr {
         return memory::make_managed<
           VariadicPhraseIterator<Adapter, true, false, true, HasIntervals>>(
-          std::move(conj_itrs), std::move(positions), rdr,
+          std::move(conj_itrs), std::move(positions), rdr, ctx.collector,
           *phrase_state->reader, stats.c_str(), ord, boost);
       });
   }
   return ResolveBool(has_intervals, [&]<bool HasIntervals> -> DocIterator::ptr {
     return memory::make_managed<
       VariadicPhraseIterator<Adapter, false, false, true, HasIntervals>>(
-      std::move(conj_itrs), std::move(positions), rdr, *phrase_state->reader,
-      stats.c_str(), ord, boost);
+      std::move(conj_itrs), std::move(positions), rdr, ctx.collector,
+      *phrase_state->reader, stats.c_str(), ord, boost);
   });
 }
 

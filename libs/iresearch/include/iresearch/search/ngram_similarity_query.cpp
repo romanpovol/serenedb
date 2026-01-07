@@ -23,6 +23,8 @@
 
 #include "ngram_similarity_query.hpp"
 
+#include <iresearch/search/column_collector.hpp>
+
 #include "iresearch/index/field_meta.hpp"
 #include "iresearch/index/index_reader.hpp"  // for SubReader/TermReader definitions
 #include "iresearch/search/min_match_disjunction.hpp"
@@ -468,7 +470,8 @@ class NGramSimilarityDocIterator : public DocIterator, private ScoreCtx {
       irs::GetMutable<CostAttr>(&_approx);
   }
 
-  NGramSimilarityDocIterator(CostAdapters&& itrs, const SubReader& segment,
+  NGramSimilarityDocIterator(CostAdapters&& itrs, const ColumnProvider& segment,
+                             ColumnCollector* collector,
                              const TermReader& field, score_t boost,
                              const byte_type* stats, size_t total_terms_count,
                              size_t min_match_count = 1,
@@ -477,7 +480,8 @@ class NGramSimilarityDocIterator : public DocIterator, private ScoreCtx {
                                  min_match_count, !ord.empty()} {
     if (!ord.empty()) {
       auto& score = std::get<irs::ScoreAttr>(_attrs);
-      CompileScore(score, ord.buckets(), segment, field, stats, *this, boost);
+      CompileScore(score, ord.buckets(), segment, collector, field, stats,
+                   *this, boost);
     }
   }
 
@@ -578,15 +582,15 @@ DocIterator::ptr NGramSimilarityQuery::execute(
   if (itrs.size() == _min_match_count) {
     return memory::make_managed<NGramSimilarityDocIterator<
       NGramApprox<true>, SerialPositionsChecker<Dummy>>>(
-      std::move(itrs), segment, *query_state->reader, _boost, _stats.c_str(),
-      query_state->terms.size(), _min_match_count, ord);
+      std::move(itrs), segment, ctx.collector, *query_state->reader, _boost,
+      _stats.c_str(), query_state->terms.size(), _min_match_count, ord);
   }
   // TODO(mbkkt) min_match_count_ == 1: disjunction for approx,
   // optimization for low threshold case
   return memory::make_managed<NGramSimilarityDocIterator<
     NGramApprox<false>, SerialPositionsChecker<Dummy>>>(
-    std::move(itrs), segment, *query_state->reader, _boost, _stats.c_str(),
-    query_state->terms.size(), _min_match_count, ord);
+    std::move(itrs), segment, ctx.collector, *query_state->reader, _boost,
+    _stats.c_str(), query_state->terms.size(), _min_match_count, ord);
 }
 
 DocIterator::ptr NGramSimilarityQuery::ExecuteWithOffsets(

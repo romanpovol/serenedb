@@ -22,6 +22,8 @@
 
 #include "column_existence_filter.hpp"
 
+#include <iresearch/search/column_collector.hpp>
+
 #include "iresearch/formats/empty_term_reader.hpp"
 #include "iresearch/index/index_reader.hpp"  // for SubReader
 #include "iresearch/search/disjunction.hpp"
@@ -42,7 +44,7 @@ class ColumnExistenceQuery : public Filter::Query {
       return DocIterator::empty();
     }
 
-    return Iterator(segment, *column, ctx.scorers);
+    return Iterator(ctx.segment, ctx.collector, *column, ctx.scorers);
   }
 
   void visit(const SubReader&, PreparedStateVisitor&, score_t) const final {
@@ -52,7 +54,8 @@ class ColumnExistenceQuery : public Filter::Query {
   score_t Boost() const noexcept final { return _boost; }
 
  protected:
-  DocIterator::ptr Iterator(const SubReader& segment,
+  DocIterator::ptr Iterator(const ColumnProvider& segment,
+                            ColumnCollector* collector,
                             const ColumnReader& column,
                             const Scorers& ord) const {
     auto it = column.iterator(ColumnHint::Mask);
@@ -63,7 +66,7 @@ class ColumnExistenceQuery : public Filter::Query {
 
     if (!ord.empty()) {
       if (auto* score = irs::GetMutable<irs::ScoreAttr>(it.get()); score) {
-        CompileScore(*score, ord.buckets(), segment,
+        CompileScore(*score, ord.buckets(), segment, collector,
                      EmptyTermReader(column.size()), _stats.c_str(), *it,
                      _boost);
       }
@@ -107,7 +110,7 @@ class ColumnPrefixExistenceQuery : public ColumnExistenceQuery {
     std::vector<AdapterT> itrs;
     for (; column->name().starts_with(prefix); column = &it->value()) {
       if (_acceptor(column->name(), prefix)) {
-        itrs.emplace_back(Iterator(segment, *column, ord));
+        itrs.emplace_back(Iterator(segment, ctx.collector, *column, ord));
       }
 
       if (!it->next()) {

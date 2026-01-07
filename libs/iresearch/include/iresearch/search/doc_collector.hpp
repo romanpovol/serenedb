@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cmath>
+#include <iresearch/index/index_reader.hpp>
+#include <iresearch/search/column_collector.hpp>
 
 #include "iresearch/index/directory_reader.hpp"
 #include "iresearch/index/index_reader_options.hpp"
@@ -27,19 +29,25 @@ size_t ExecuteTopK(const DirectoryReader& reader, const Filter& filter,
   auto pivot = begin + k;
   auto end = results.end();
 
+  ColumnCollector columns;
   for (auto& segment : reader) {
+    columns.Clear();
+
     auto docs = prepared->execute({
       .segment = segment,
       .scorers = scorers,
+      .collector = &columns,
       .wand = wand,
     });
-    const auto* doc = irs::get<DocAttr>(*docs);
     const auto* score = irs::get<ScoreAttr>(*docs);
     if (score) {
       score->Min(min_threshold);
     }
 
-    for (float_t score_value; docs->next();) {
+    float_t score_value;
+    doc_id_t doc;
+    while (!doc_limits::eof(doc = docs->advance())) {
+      columns.Collect(doc);
       ++count;
 
       (*score)(&score_value);
@@ -48,7 +56,7 @@ size_t ExecuteTopK(const DirectoryReader& reader, const Filter& filter,
         continue;
       }
 
-      *begin = {score_value, doc->value};
+      *begin = {score_value, doc};
       ++begin;
 
       if (begin == end) {
@@ -97,22 +105,21 @@ size_t ExecuteTopKHeap(
   for (auto left = k; auto& segment : reader) {
     auto docs = prepared->execute(irs::ExecutionContext{
       .segment = segment, .scorers = scorers, .wand = wand});
-    const auto* doc = irs::get<irs::DocAttr>(*docs);
     const auto* score = irs::get<irs::ScoreAttr>(*docs);
-    auto* threshold = irs::GetMutable<irs::ScoreAttr>(docs.get());
-    SDB_ASSERT(threshold);
 
-    if (!left && threshold) {
-      threshold->Min(results.front().first);
+    if (!left && score) {
+      score->Min(results.front().first);
     }
 
-    for (float_t score_value; docs->next();) {
+    float_t score_value;
+    doc_id_t doc;
+    while (!doc_limits::eof(doc = docs->advance())) {
       ++count;
 
       (*score)(&score_value);
 
       if (begin != end) {
-        *begin = {score_value, doc->value};
+        *begin = {score_value, doc};
         ++begin;
 
         if (begin == end) {
@@ -121,7 +128,7 @@ size_t ExecuteTopKHeap(
                               return lhs.first > rhs.first;
                             });
 
-          threshold->Min(results.front().first);
+          score->Min(results.front().first);
         }
       } else if (results.front().first < score_value) {
         absl::c_pop_heap(results,
@@ -131,7 +138,7 @@ size_t ExecuteTopKHeap(
 
         auto& [score, doc_id] = results.back();
         score = score_value;
-        doc_id = doc->value;
+        doc_id = doc;
 
         absl::c_push_heap(
           results, [](const std::pair<float_t, irs::doc_id_t>& lhs,
@@ -139,7 +146,7 @@ size_t ExecuteTopKHeap(
             return lhs.first > rhs.first;
           });
 
-        threshold->Min(results.front().first);
+        score->Min(results.front().first);
       }
     }
   }

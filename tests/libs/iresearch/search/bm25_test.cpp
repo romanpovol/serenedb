@@ -26,6 +26,7 @@
 #include <iresearch/search/all_filter.hpp>
 #include <iresearch/search/bm25.hpp>
 #include <iresearch/search/boolean_filter.hpp>
+#include <iresearch/search/column_collector.hpp>
 #include <iresearch/search/column_existence_filter.hpp>
 #include <iresearch/search/phrase_filter.hpp>
 #include <iresearch/search/prefix_filter.hpp>
@@ -35,6 +36,7 @@
 #include <iresearch/search/scorers.hpp>
 #include <iresearch/search/term_filter.hpp>
 #include <iresearch/utils/bytes_output.hpp>
+#include <iresearch/utils/lz4compression.hpp>
 
 #include "index/index_tests.hpp"
 #include "tests_shared.hpp"
@@ -112,6 +114,7 @@ void Bm25TestCase::TestQueryNorms(irs::FeatureWriterFactory handler) {
   ASSERT_NE(nullptr, column);
 
   MaxMemoryCounter counter;
+  irs::ColumnCollector columns;
 
   // by_range multiple
   {
@@ -138,12 +141,16 @@ void Bm25TestCase::TestQueryNorms(irs::FeatureWriterFactory handler) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+
+    columns.Clear();
+
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -190,11 +197,15 @@ void Bm25TestCase::TestQueryNorms(irs::FeatureWriterFactory handler) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+
+    columns.Clear();
+
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -381,6 +392,7 @@ TEST_P(Bm25TestCase, test_phrase) {
   auto& segment = *(index.begin());
 
   MaxMemoryCounter counter;
+  irs::ColumnCollector columns;
 
   // "jumps high" with order
   {
@@ -404,8 +416,11 @@ TEST_P(Bm25TestCase, test_phrase) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+
+    columns.Clear();
+
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
@@ -417,6 +432,7 @@ TEST_P(Bm25TestCase, test_phrase) {
     ASSERT_NE(nullptr, actual_value);
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -470,8 +486,11 @@ TEST_P(Bm25TestCase, test_phrase) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+
+    columns.Clear();
+
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
@@ -483,6 +502,7 @@ TEST_P(Bm25TestCase, test_phrase) {
     ASSERT_NE(nullptr, actual_value);
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -531,6 +551,7 @@ TEST_P(Bm25TestCase, test_query) {
   ASSERT_NE(nullptr, column);
 
   MaxMemoryCounter counter;
+  irs::ColumnCollector columns;
 
   // by_term
   {
@@ -553,12 +574,14 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -646,7 +669,9 @@ TEST_P(Bm25TestCase, test_query) {
       .scorers = prepared_order,
     });
 
+    irs::ColumnCollector columns;
     for (auto& segment : reader) {
+      columns.Clear();
       const auto* column = segment.column("seq");
       ASSERT_NE(nullptr, column);
       auto values = column->iterator(irs::ColumnHint::Normal);
@@ -654,11 +679,12 @@ TEST_P(Bm25TestCase, test_query) {
       auto* actual_value = irs::get<irs::PayAttr>(*values);
       ASSERT_NE(nullptr, actual_value);
       auto docs = prepared_filter->execute(
-        {.segment = segment, .scorers = prepared_order});
+        {.segment = segment, .scorers = prepared_order, .collector = &columns});
       auto* score = irs::get<irs::ScoreAttr>(*docs);
       ASSERT_TRUE(bool(score));
 
       while (docs->next()) {
+        columns.Collect(docs->value());
         irs::score_t score_value{};
         (*score)(&score_value);
         ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -760,6 +786,7 @@ TEST_P(Bm25TestCase, test_query) {
     });
 
     for (auto& segment : reader) {
+      columns.Clear();
       const auto* column = segment.column("seq");
       ASSERT_NE(nullptr, column);
       auto values = column->iterator(irs::ColumnHint::Normal);
@@ -767,11 +794,12 @@ TEST_P(Bm25TestCase, test_query) {
       auto* actual_value = irs::get<irs::PayAttr>(*values);
       ASSERT_NE(nullptr, actual_value);
       auto docs = prepared_filter->execute(
-        {.segment = segment, .scorers = prepared_order});
+        {.segment = segment, .scorers = prepared_order, .collector = &columns});
       auto* score = irs::get<irs::ScoreAttr>(*docs);
       ASSERT_TRUE(bool(score));
 
       while (docs->next()) {
+        columns.Collect(docs->value());
         irs::score_t score_value{};
         (*score)(&score_value);
         ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -862,7 +890,9 @@ TEST_P(Bm25TestCase, test_query) {
       .scorers = prepared_order,
     });
 
+    irs::ColumnCollector columns;
     for (auto& segment : reader) {
+      columns.Clear();
       const auto* column = segment.column("seq");
       ASSERT_NE(nullptr, column);
       auto values = column->iterator(irs::ColumnHint::Normal);
@@ -870,11 +900,12 @@ TEST_P(Bm25TestCase, test_query) {
       auto* actual_value = irs::get<irs::PayAttr>(*values);
       ASSERT_NE(nullptr, actual_value);
       auto docs = prepared_filter->execute(
-        {.segment = segment, .scorers = prepared_order});
+        {.segment = segment, .scorers = prepared_order, .collector = &columns});
       auto* score = irs::get<irs::ScoreAttr>(*docs);
       ASSERT_TRUE(bool(score));
 
       while (docs->next()) {
+        columns.Collect(docs->value());
         irs::score_t score_value{};
         (*score)(&score_value);
         ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -922,11 +953,13 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -975,12 +1008,14 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -1027,11 +1062,13 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -1078,12 +1115,14 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -1131,11 +1170,13 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
 
     while (docs->next()) {
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -1173,13 +1214,15 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
 
     irs::doc_id_t doc = irs::doc_limits::min();
     while (docs->next()) {
+      columns.Collect(docs->value());
       ASSERT_EQ(doc, docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
@@ -1208,8 +1251,9 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
     ASSERT_TRUE(score->Func() == &irs::ScoreFunction::DefaultScore);
@@ -1218,6 +1262,7 @@ TEST_P(Bm25TestCase, test_query) {
     while (docs->next()) {
       ASSERT_EQ(doc, docs->value());
 
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -1246,8 +1291,9 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
     ASSERT_FALSE(score->Func() == &irs::ScoreFunction::DefaultScore);
@@ -1256,6 +1302,7 @@ TEST_P(Bm25TestCase, test_query) {
     while (docs->next()) {
       ASSERT_EQ(doc, docs->value());
 
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
       ASSERT_EQ(docs->value(), values->seek(docs->value()));
@@ -1285,8 +1332,9 @@ TEST_P(Bm25TestCase, test_query) {
       .memory = counter,
       .scorers = prepared_order,
     });
-    auto docs =
-      prepared_filter->execute({.segment = segment, .scorers = prepared_order});
+    columns.Clear();
+    auto docs = prepared_filter->execute(
+      {.segment = segment, .scorers = prepared_order, .collector = &columns});
     auto* score = irs::get<irs::ScoreAttr>(*docs);
     ASSERT_TRUE(bool(score));
     ASSERT_TRUE(score->Func() == &irs::ScoreFunction::DefaultScore);
@@ -1295,6 +1343,7 @@ TEST_P(Bm25TestCase, test_query) {
     while (docs->next()) {
       ASSERT_EQ(doc, docs->value());
 
+      columns.Collect(docs->value());
       irs::score_t score_value{};
       (*score)(&score_value);
 
@@ -1575,6 +1624,7 @@ TEST_P(Bm25TestCase, test_order) {
   auto& segment = *(reader.begin());
 
   MaxMemoryCounter counter;
+  irs::ColumnCollector columns;
 
   irs::ByTerm query;
   *query.mutable_field() = "field";
@@ -1614,12 +1664,15 @@ TEST_P(Bm25TestCase, test_order) {
           .scorers = prepared_order,
           .boost = boost,
         });
-        auto docs =
-          prepared->execute({.segment = segment, .scorers = prepared_order});
+        columns.Clear();
+        auto docs = prepared->execute({.segment = segment,
+                                       .scorers = prepared_order,
+                                       .collector = &columns});
         auto* score = irs::get<irs::ScoreAttr>(*docs);
         ASSERT_TRUE(bool(score));
 
         for (; docs->next();) {
+          columns.Collect(docs->value());
           irs::score_t score_value{};
           (*score)(&score_value);
 

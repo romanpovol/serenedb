@@ -28,19 +28,18 @@
 #include <vpack/vpack.h>
 
 #include <cstdint>
-#include <iresearch/utils/attribute_provider.hpp>
+#include <utility>
 
 #include "basics/down_cast.h"
-#include "basics/math_utils.hpp"
-#include "basics/misc.hpp"
 #include "iresearch/analysis/token_attributes.hpp"
 #include "iresearch/formats/wand_writer.hpp"
 #include "iresearch/index/field_meta.hpp"
 #include "iresearch/index/index_reader.hpp"
 #include "iresearch/index/norm.hpp"
+#include "iresearch/search/column_collector.hpp"
+#include "iresearch/search/scorer.hpp"
 #include "iresearch/search/scorer_impl.hpp"
-#include "iresearch/utils/type_limits.hpp"
-#include "scorer.hpp"
+#include "iresearch/utils/attribute_provider.hpp"
 #include "vpack/serializer.h"
 
 namespace irs {
@@ -188,41 +187,19 @@ struct BM15Context : public BM1Context {
   float_t norm_const;    // 'k' factor
 };
 
-template<typename Norm>
-struct BM25Context final : public BM15Context {
+struct BM25Context : public BM15Context {
   BM25Context(float_t k, score_t boost, const BM25Stats& stats,
-              const doc_id_t* doc, const uint32_t* freq, Norm&& norm,
+              const uint32_t* freq, const uint32_t* norm,
               const score_t* filter_boost = nullptr) noexcept
     : BM15Context{k, boost, stats, freq, filter_boost},
-      norm{std::move(norm)},
       norm_length{stats.norm_length},
-      doc{doc},
+      norm{norm},
       norm_cache{stats.norm_cache} {}
 
-  Norm norm;
   float_t norm_length;  // precomputed 'k*b/avg_dl'
-  const doc_id_t* doc;
+  const uint32_t* norm;
   const float_t* norm_cache;
 };
-
-template<typename Reader, NormType Type>
-struct BM25NormAdapter final {
-  static constexpr auto kType = Type;
-
-  explicit BM25NormAdapter(Reader&& reader) : reader{std::move(reader)} {}
-
-  IRS_FORCE_INLINE decltype(auto) operator()(doc_id_t doc) {
-    // norms are stored |doc| as uint32_t
-    return reader(doc);
-  }
-
-  [[no_unique_address]] Reader reader;
-};
-
-template<NormType Type, typename Reader>
-auto MakeBM25NormAdapter(Reader&& reader) {
-  return BM25NormAdapter<Reader, Type>(std::move(reader));
-}
 
 }  // namespace
 
@@ -283,9 +260,12 @@ struct MakeScoreFunctionImpl<BM15Context> {
   }
 };
 
-template<typename Norm>
-struct MakeScoreFunctionImpl<BM25Context<Norm>> {
-  using Ctx = BM25Context<Norm>;
+template<byte_type NormLength>
+struct BM25ContextImpl : BM25Context {};
+
+template<byte_type NormLength>
+struct MakeScoreFunctionImpl<BM25ContextImpl<NormLength>> {
+  using Ctx = BM25Context;
 
   template<bool HasFilterBoost, typename... Args>
   static auto Make(Args&&... args) {
@@ -307,18 +287,15 @@ struct MakeScoreFunctionImpl<BM25Context<Norm>> {
           c0 = state.num;
         }
 
-        if constexpr (NormType::NormTiny == Norm::kType) {
-          static_assert(
-            std::is_same_v<uint32_t, decltype(state.norm(*state.doc))>);
-          SDB_ASSERT((state.norm(*state.doc) & 0xFFU) != 0U);
-          const float_t inv_c1 =
-            state.norm_cache[state.norm(*state.doc) & 0xFFU];
+        if constexpr (NormLength == sizeof(byte_type)) {
+          SDB_ASSERT((*state.norm & 0xFFU) != 0U);
+          const float_t inv_c1 = state.norm_cache[*state.norm & 0xFFU];
 
           *res = c0 - c0 / (1.f + tf * inv_c1);
         } else {
           const float_t c1 =
             state.norm_const +
-            state.norm_length * static_cast<float_t>(state.norm(*state.doc));
+            state.norm_length * static_cast<float_t>(*state.norm);
 
           *res = c0 - c0 * c1 / (c1 + tf);
         }
@@ -377,78 +354,55 @@ FieldCollector::ptr BM25::PrepareFieldCollector() const {
   return std::make_unique<BM25FieldCollector>();
 }
 
-struct Collector {
-  virtual ~Collector() = default;
-  virtual void Collect() = 0;
-};
-
-ScoreFunction BM25::PrepareScorer(const ColumnProvider& segment,
-                                  const FieldProperties& meta,
-                                  const byte_type* query_stats,
-                                  const AttributeProvider& doc_attrs,
-                                  score_t boost) const {
-  auto* freq = irs::get<FreqAttr>(doc_attrs);
+ScoreFunction BM25::PrepareScorer(const ScoreContext& ctx) const {
+  auto* freq = irs::get<FreqAttr>(ctx.doc_attrs);
 
   if (!freq) {
-    if (!_boost_as_score || 0.f == boost) {
+    if (!_boost_as_score || 0.f == ctx.boost) {
       return ScoreFunction::Default(1);
     }
 
     // if there is no frequency then all the scores
     // will be the same (e.g. filter irs::all)
-    return ScoreFunction::Constant(boost);
+    return ScoreFunction::Constant(ctx.boost);
   }
 
-  auto* stats = stats_cast(query_stats);
-  auto* filter_boost = irs::get<irs::FilterBoost>(doc_attrs);
+  auto* stats = stats_cast(ctx.stats);
+  auto* filter_boost = irs::get<irs::FilterBoost>(ctx.doc_attrs);
 
   if (IsBM1()) {
-    return MakeScoreFunction<BM1Context>(filter_boost, _k, boost, *stats);
+    return MakeScoreFunction<BM1Context>(filter_boost, _k, ctx.boost, *stats);
   }
 
   if (IsBM15()) {
-    return MakeScoreFunction<BM15Context>(filter_boost, _k, boost, *stats,
+    return MakeScoreFunction<BM15Context>(filter_boost, _k, ctx.boost, *stats,
                                           &freq->value);
   }
 
-  auto* doc = irs::get<DocAttr>(doc_attrs);
+  // Check if norms are present in attributes
+  auto* norm = irs::get<Norm>(ctx.doc_attrs);
 
-  if (!doc) [[unlikely]] {
-    // We need 'document' attribute to be exposed.
-    return ScoreFunction::Default(1);
+  if (!norm && ctx.collector) {
+    norm = ctx.collector->AddNorm(ctx.segment.column(ctx.field.norm));
   }
 
-  auto prepare_norm_scorer = [&]<typename Norm>(Norm&& norm) -> ScoreFunction {
-    return MakeScoreFunction<BM25Context<Norm>>(filter_boost, _k, boost, *stats,
-                                                &doc->value, &freq->value,
-                                                std::move(norm));
+  if (!norm) {
+    // No norms, pretend all fields have the same length 1.
+    static constexpr Norm kEmptyNorm{.value = 1U};
+    norm = &kEmptyNorm;
+  }
+
+  auto make_scorer = [&]<size_t N> {
+    return MakeScoreFunction<BM25ContextImpl<N>>(filter_boost, _k, ctx.boost,
+                                                 *stats, &freq->value,
+                                                 norm ? &norm->value : nullptr);
   };
 
-  // Check if norms are present in attributes
-  if (auto* norm = irs::get<Norm>(doc_attrs); norm) {
-    return prepare_norm_scorer(MakeBM25NormAdapter<NormType::Norm>(
-      [norm](doc_id_t) noexcept { return norm->value; }));
+  if (norm->num_bytes == sizeof(byte_type)) {
+    return make_scorer.template operator()<sizeof(byte_type)>();
   }
 
-  if (field_limits::valid(meta.norm)) {
-    if (NormReaderContext ctx; ctx.Reset(segment, meta.norm)) {
-      if (ctx.max_num_bytes == sizeof(byte_type)) {
-        return Norm::MakeReader(std::move(ctx), [&](auto&& reader) {
-          return prepare_norm_scorer(
-            MakeBM25NormAdapter<NormType::NormTiny>(std::move(reader)));
-        });
-      }
-
-      return Norm::MakeReader(std::move(ctx), [&](auto&& reader) {
-        return prepare_norm_scorer(
-          MakeBM25NormAdapter<NormType::Norm>(std::move(reader)));
-      });
-    }
-  }
-
-  // No norms, pretend all fields have the same length 1.
-  return prepare_norm_scorer(
-    MakeBM25NormAdapter<NormType::NormTiny>([](doc_id_t) { return 1U; }));
+  return make_scorer.template operator()<sizeof(uint32_t)>();
 }
 
 WandWriter::ptr BM25::prepare_wand_writer(size_t max_levels) const {

@@ -105,18 +105,14 @@ struct DocIdScorer : irs::ScorerBase<void> {
     return irs::IndexFeatures::None;
   }
 
-  irs::ScoreFunction PrepareScorer(const irs::ColumnProvider&,
-                                   const irs::FieldProperties&,
-                                   const irs::byte_type*,
-                                   const irs::AttributeProvider& attrs,
-                                   irs::score_t) const final {
+  irs::ScoreFunction PrepareScorer(const irs::ScoreContext& ctx) const final {
     struct ScorerContext final : irs::ScoreCtx {
       explicit ScorerContext(const irs::DocAttr* doc) noexcept : doc{doc} {}
 
       const irs::DocAttr* doc;
     };
 
-    auto* doc = irs::get<irs::DocAttr>(attrs);
+    auto* doc = irs::get<irs::DocAttr>(ctx.doc_attrs);
     EXPECT_NE(nullptr, doc);
 
     return irs::ScoreFunction::Make<ScorerContext>(

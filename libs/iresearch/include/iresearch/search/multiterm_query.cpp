@@ -149,8 +149,8 @@ DocIterator::ptr MultiTermQuery::execute(const ExecutionContext& ctx) const {
       SDB_ASSERT(score);
       SDB_ASSERT(entry.stat_offset < stats.size());
       auto* stat = stats[entry.stat_offset].c_str();
-      CompileScore(*score, ord.buckets(), segment, *state->reader, stat, *docs,
-                   entry.boost * _boost);
+      CompileScore(*score, ord.buckets(), ctx.segment, ctx.collector,
+                   *state->reader, stat, *docs, entry.boost * _boost);
     }
 
     SDB_ASSERT(it != std::end(itrs));

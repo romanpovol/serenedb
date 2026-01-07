@@ -44,15 +44,11 @@ struct VolatileBoostScoreCtx final : ScoreCtx {
 
 }  // namespace
 
-ScoreFunction BoostScore::PrepareScorer(const ColumnProvider& /*segment*/,
-                                        const FieldProperties& /*meta*/,
-                                        const byte_type* /*stats*/,
-                                        const AttributeProvider& attrs,
-                                        score_t boost) const {
-  const auto* volatile_boost = irs::get<irs::FilterBoost>(attrs);
+ScoreFunction BoostScore::PrepareScorer(const ScoreContext& ctx) const {
+  const auto* volatile_boost = irs::get<irs::FilterBoost>(ctx.doc_attrs);
 
   if (volatile_boost == nullptr) {
-    return ScoreFunction::Constant(boost);
+    return ScoreFunction::Constant(ctx.boost);
   }
 
   return ScoreFunction::Make<VolatileBoostScoreCtx>(
@@ -60,7 +56,7 @@ ScoreFunction BoostScore::PrepareScorer(const ColumnProvider& /*segment*/,
       auto& state = *static_cast<VolatileBoostScoreCtx*>(ctx);
       *res = state.volatile_boost->value * state.boost;
     },
-    ScoreFunction::DefaultMin, volatile_boost, boost);
+    ScoreFunction::DefaultMin, volatile_boost, ctx.boost);
 }
 
 void BoostScore::init() { REGISTER_SCORER_JSON(BoostScore, MakeJson); }

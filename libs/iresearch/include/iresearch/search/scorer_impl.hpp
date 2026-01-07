@@ -106,10 +106,8 @@ ScoreFunction MakeScoreFunction(const FilterBoost* filter_boost,
 }
 
 enum class NormType {
-  // Norm values
-  Norm = 0,
-  // Norm values fit 1-byte
-  NormTiny,
+  Norm = 0,  // Norm values
+  NormTiny,  // Norm values fit 1-byte
 };
 
 }  // namespace irs

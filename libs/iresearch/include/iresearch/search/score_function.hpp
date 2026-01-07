@@ -44,6 +44,7 @@ struct ScoreCtx {
 class ScoreFunction : util::Noncopyable {
   using score_f = void (*)(ScoreCtx* ctx, score_t* res) noexcept;
   using min_f = void (*)(ScoreCtx* ctx, score_t min) noexcept;
+  using collect_f = void (*)(ScoreCtx* ctx);
 
   using deleter_f = void (*)(ScoreCtx* ctx) noexcept;
   static void Noop(ScoreCtx* /*ctx*/) noexcept {}
@@ -56,6 +57,7 @@ class ScoreFunction : util::Noncopyable {
     std::memset(res, 0, size);
   }
   static void DefaultMin(ScoreCtx* /*ctx*/, score_t /*min*/) noexcept {}
+  static void DefaultCollect(ScoreCtx* /*ctx*/) noexcept {}
 
   // Returns default scoring function setting `size` score buckets to 0.
   static ScoreFunction Default(size_t count) noexcept {
@@ -112,6 +114,11 @@ class ScoreFunction : util::Noncopyable {
     _score(_ctx, res);
   }
 
+  IRS_FORCE_INLINE void Collect(score_t* res) const noexcept {
+    SDB_ASSERT(_collect != nullptr);
+    _collect(_ctx);
+  }
+
   IRS_FORCE_INLINE void Min(score_t arg) const noexcept {
     SDB_ASSERT(_min != nullptr);
     _min(_ctx, arg);
@@ -137,6 +144,7 @@ class ScoreFunction : util::Noncopyable {
     : _ctx{ctx}, _score{score}, _min{min}, _deleter{deleter} {}
 
   ScoreCtx* _ctx{nullptr};
+  collect_f _collect{DefaultCollect};
   score_f _score{DefaultScore};
   min_f _min{DefaultMin};
   deleter_f _deleter{Noop};

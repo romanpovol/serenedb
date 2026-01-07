@@ -64,6 +64,7 @@ using ScoreFunctions = sdb::containers::SmallVector<ScoreFunction, 1>;
 // Prepare scorer for each of the bucket.
 ScoreFunctions PrepareScorers(std::span<const ScorerBucket> buckets,
                               const ColumnProvider& segment,
+                              ColumnCollector* collector,
                               const TermReader& field, const byte_type* stats,
                               const AttributeProvider& doc, score_t boost);
 
@@ -71,9 +72,9 @@ ScoreFunctions PrepareScorers(std::span<const ScorerBucket> buckets,
 ScoreFunction CompileScorers(ScoreFunctions&& scorers);
 
 void CompileScore(irs::ScoreAttr& score, std::span<const ScorerBucket> buckets,
-                  const ColumnProvider& segment, const TermReader& field,
-                  const byte_type* stats, const AttributeProvider& doc,
-                  score_t boost);
+                  const ColumnProvider& segment, ColumnCollector* collector,
+                  const TermReader& field, const byte_type* stats,
+                  const AttributeProvider& doc, score_t boost);
 
 // Prepare empty collectors, i.e. call collect(...) on each of the
 // buckets without explicitly collecting field or term statistics,
